@@ -1,0 +1,35 @@
+[gd_scene format=3 uid="uid://cwltke5hpvgt2"]
+
+[ext_resource type="Script" uid="uid://c38kfq8le68jo" path="res://Main/Player/player_controller.gd" id="1_8hbiy"]
+[ext_resource type="Texture2D" uid="uid://djtv6l3tf1hk5" path="res://Assets/2dArt/Tank.png" id="2_kwyrm"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_pk0cp"]
+radius = 7.0
+height = 21.0
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_player"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:rotation")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+
+[node name="Player" type="CharacterBody2D" unique_id=1262768842]
+collision_mask = 2
+motion_mode = 1
+script = ExtResource("1_8hbiy")
+move_speed = 80.0
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=2012338094]
+rotation = 1.5707964
+texture = ExtResource("2_kwyrm")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1274264812]
+rotation = 1.5707964
+shape = SubResource("CapsuleShape2D_pk0cp")
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." unique_id=1402649099]
+replication_config = SubResource("SceneReplicationConfig_player")
+
+[node name="BulletSpawner" type="MultiplayerSpawner" parent="." unique_id=1359256796]

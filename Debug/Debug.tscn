@@ -1,0 +1,22 @@
+[gd_scene load_steps=5 format=3 uid="uid://1tbypxy1khc1"]
+
+[ext_resource type="Script" path="res://Debug/debug_sandbox.gd" id="1_sandbox"]
+[ext_resource type="PackedScene" path="res://Main/Maze/maze_generator.tscn" id="2_mazegen"]
+[ext_resource type="Script" path="res://Main/Maze/maze_builder.gd" id="3_mazebuilder"]
+[ext_resource type="PackedScene" path="res://Main/Player/player.tscn" id="4_player"]
+
+[node name="Debug" type="Node2D" unique_id=1444023706]
+script = ExtResource("1_sandbox")
+
+[node name="MazeContainer" type="Node2D" parent="."]
+script = ExtResource("3_mazebuilder")
+
+[node name="MazeGenerator" parent="MazeContainer" instance=ExtResource("2_mazegen")]
+
+[node name="Bullets" type="Node2D" parent="."]
+unique_name_in_owner = true
+
+[node name="Player" parent="." instance=ExtResource("4_player")]
+
+[node name="Camera2D" type="Camera2D" parent="Player"]
+current = true
