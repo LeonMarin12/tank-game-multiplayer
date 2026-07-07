@@ -44,4 +44,5 @@ text = "Sin conectar"
 layout_mode = 0
 offset_right = 100.0
 offset_bottom = 20.0
+focus_mode = 0
 text = "Host"

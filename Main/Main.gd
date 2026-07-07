@@ -9,6 +9,7 @@ extends Node2D
 
 const PLAYER_SCENE := preload("res://Main/Player/player.tscn")
 const SPAWN_RING_SLOTS := 4 # cuantas posiciones distintas hay alrededor del START
+const RESPAWN_DELAY := 3.0 # segundos entre morir y respawnear
 
 @onready var maze_container: MazeBuilder = $MazeContainer
 @onready var players: Node = $Players
@@ -55,10 +56,16 @@ func _on_peer_connected(peer_id: int) -> void:
 # El servidor es la unica autoridad del PlayerSpawner: agregar un hijo aca bajo
 # "Players" es lo que el MultiplayerSpawner detecta y replica automaticamente a
 # todos los clientes (instanciando player.tscn, definido en _spawnable_scenes).
+#
+# OJO: la señal "spawned" del PlayerSpawner NO se dispara para este mismo peer
+# (el que hace add_child) — solo se dispara en los DEMAS peers cuando reciben la
+# replicacion (ver _on_player_spawned). Por eso ac configuramos el bullet
+# container y la posicion inicial a mano, en vez de depender solo de la señal.
 func spawn_player(peer_id: int) -> void:
 	var new_player := PLAYER_SCENE.instantiate()
 	new_player.name = str(peer_id) # el nombre = peer_id es lo que usa set_multiplayer_authority()
 	players.add_child(new_player)
+	new_player.set_bullet_container(bullets)
 	_place_player(new_player)
 
 
@@ -96,7 +103,12 @@ func _place_player(player: Node) -> void:
 # que disparo, y ese peer NO tiene autoridad para destruir un Player ajeno (los
 # players los crea/destruye el servidor via PlayerSpawner). Por eso el impacto
 # se resuelve pidiendoselo al servidor por RPC en vez de un queue_free() directo.
-@rpc("any_peer", "reliable")
+# "call_local" es necesario para el caso en que el HOST mismo es quien dispara:
+# ahi rpc_id(1, ...) apunta a si mismo (caller_id == target_id == 1), y Godot
+# rechaza ese caso salvo que call_local este activado. Para clientes normales
+# (caller != 1) esto solo hace que la funcion tambien corra localmente en el
+# cliente, donde el guard de abajo la ignora sin problema (no es el servidor).
+@rpc("any_peer", "call_local", "reliable")
 func request_kill_player(peer_id: int) -> void:
 	if not multiplayer.is_server():
 		return
@@ -105,6 +117,26 @@ func request_kill_player(peer_id: int) -> void:
 		# El servidor es autoridad del PlayerSpawner -> este queue_free() se
 		# replica solo a todos los peers como un despawn, sin RPC adicional.
 		player.queue_free()
+		_respawn_after_delay(peer_id)
+
+
+# Respawnea automaticamente al mismo peer_id despues de RESPAWN_DELAY segundos.
+# Corre solo en el servidor (unico llamador: request_kill_player, ya filtrado
+# por is_server() arriba). El await no bloquea nada mas: el resto del juego
+# sigue andando normal mientras este timer espera de fondo.
+func _respawn_after_delay(peer_id: int) -> void:
+	await get_tree().create_timer(RESPAWN_DELAY).timeout
+	# El peer pudo haberse desconectado durante la espera; si ya no esta
+	# conectado, no tiene sentido spawnearle un tanque a nadie.
+	if _is_peer_connected(peer_id):
+		spawn_player(peer_id)
+
+
+func _is_peer_connected(peer_id: int) -> bool:
+	# get_peers() devuelve los peers conectados SIN incluir el propio id local
+	# (que aca, al correr siempre en el servidor, es el del host) — por eso el
+	# caso del host se chequea aparte.
+	return peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(peer_id)
 
 
 # --- UI de estado --------------------------------------------------------------

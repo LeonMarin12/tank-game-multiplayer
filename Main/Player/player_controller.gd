@@ -1,25 +1,18 @@
 extends CharacterBody2D
 
-@export var move_speed := 200.0
+@export_category('Stats')
+@export var move_speed := 80.0
 @export var rotation_speed := 3.0 # rad/s
 @export var fire_cooldown := 0.3 # segundos entre disparos
 
-const BULLET_SCENE := preload("res://Main/Bullet/bullet.tscn")
+@export_category('Scenes')
+@export var bullet_scene :PackedScene
 
 var _fire_timer := 0.0
 @onready var bullet_spawner: MultiplayerSpawner = $BulletSpawner
 
 
 func _enter_tree() -> void:
-	# El nombre del nodo es el peer_id (asignado por quien spawnea al jugador, ver Main.gd)
-	# CUANDO el juego corre en red. Si en cambio agregaste el Player a mano en una escena
-	# de prueba (ej. Debug.tscn) el nombre no es numerico ("Player", "Player2", etc.) —
-	# ahi NO tocamos la autoridad: queda en su valor por defecto (1), que ya coincide con
-	# multiplayer.get_unique_id() sin un MultiplayerPeer activo, asi que
-	# is_multiplayer_authority() sigue dando true y el tanque se mueve igual sin red.
-	# set_multiplayer_authority es recursivo: tambien deja a BulletSpawner (hijo) bajo la
-	# misma autoridad, asi el dueno de este tanque puede spawnear sus propias balas sin
-	# pedirle permiso al servidor.
 	if name.is_valid_int():
 		set_multiplayer_authority(name.to_int())
 
@@ -86,7 +79,7 @@ func _shoot() -> void:
 
 
 func _create_bullet(data: Dictionary) -> Node:
-	var bullet := BULLET_SCENE.instantiate()
+	var bullet := bullet_scene.instantiate()
 	bullet.global_position = data.position
 	bullet.rotation = data.rotation
 	# shooter_id debe quedar asignado ANTES de que el nodo entre al arbol: bullet._enter_tree()

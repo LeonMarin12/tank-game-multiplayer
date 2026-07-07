@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://cwltke5hpvgt2"]
 
 [ext_resource type="Script" uid="uid://c38kfq8le68jo" path="res://Main/Player/player_controller.gd" id="1_8hbiy"]
+[ext_resource type="PackedScene" path="res://Main/Bullet/bullet.tscn" id="2_1crik"]
 [ext_resource type="Texture2D" uid="uid://djtv6l3tf1hk5" path="res://Assets/2dArt/Tank.png" id="2_kwyrm"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_pk0cp"]
@@ -19,7 +20,7 @@ properties/1/replication_mode = 1
 collision_mask = 2
 motion_mode = 1
 script = ExtResource("1_8hbiy")
-move_speed = 80.0
+bullet_scene = ExtResource("2_1crik")
 
 [node name="Sprite2D" type="Sprite2D" parent="." unique_id=2012338094]
 rotation = 1.5707964

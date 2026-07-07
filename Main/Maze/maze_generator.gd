@@ -153,8 +153,8 @@ func has_wall_between(pos1 :Vector2i, pos2 :Vector2i) -> bool:
 
 func assign_cell_content():
 	# Calculate center position
-	var center_x = maze_width / 2
-	var center_y = maze_height / 2
+	var center_x = maze_width / 2.0
+	var center_y = maze_height / 2.0
 	
 	for y in range(maze_height):
 		for x in range(maze_width):

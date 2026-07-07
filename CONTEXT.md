@@ -31,8 +31,11 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   sincroniza el seed del laberinto por RPC dirigido a cada peer nuevo (antes de
   spawnearlo), spawnea jugadores vía `PlayerSpawner` (modo automático, solo el
   servidor hace `add_child`), y resuelve la destrucción de un player impactado
-  con un RPC (`request_kill_player`) dirigido al servidor. UI mínima: botón
-  "Host" + label de estado (`Main/lobby_ui.gd`).
+  con un RPC (`request_kill_player`) dirigido al servidor. Al morir, el servidor
+  respawnea automáticamente al mismo `peer_id` después de `RESPAWN_DELAY=3.0`s
+  (`_respawn_after_delay`, con `await get_tree().create_timer(...)`), siempre
+  que el peer siga conectado. UI mínima: botón "Host" + label de estado
+  (`Main/lobby_ui.gd`).
 - **project.godot**: GodotSteam habilitado y configurado (`app_id=480` de test,
   `initialize_on_startup=false`), autoload `Networking`, layers Player/Wall/Bullet,
   input map `move_forward/move_backward/rotate_left/rotate_right/shoot`,
@@ -108,8 +111,20 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   tanque no procesaba input ni se movía. Ahora `_enter_tree()` solo toca la
   autoridad si `name.is_valid_int()`; verificado con un test headless simulando
   `move_forward`.
-- **Bug real ya corregido (disparo)**: `bullet_spawner.spawn()` tiraba "Cannot
+- **Bug real ya corregido (disparo, v1)**: `bullet_spawner.spawn()` tiraba "Cannot
   find spawn node" (parent null) porque `spawn_path="%Bullets"` nunca resolvía
   — ver la decisión de arriba sobre nombres únicos. Corregido con
   `set_bullet_container()`; verificado con un test headless simulando `shoot`
   (bullets_before=0 → bullets_after=1, sin errores).
+- **Bug real ya corregido (kill del propio host)**: `request_kill_player.rpc_id(1, hit_id)`
+  fallaba con "RPC on yourself is not allowed by selected mode" cuando el HOST
+  mismo era quien disparaba (ahi caller_id == target_id == 1, y Godot rechaza
+  apuntarte un RPC a vos mismo salvo `call_local`). El `@rpc` de
+  `request_kill_player` en `Main.gd` ahora incluye `"call_local"`.
+- **Bug real ya corregido (disparo, v2)**: el mismo error volvía a aparecer en
+  `Main.tscn` (no en `Debug.tscn`) porque la señal `spawned` del `PlayerSpawner`
+  **no se dispara para el propio peer que hace `add_child()`** — solo se dispara
+  en los demás peers al recibir la replicación. `set_bullet_container()` estaba
+  solo en `_on_player_spawned` (el handler de esa señal), así que el player del
+  host nunca lo recibía. Ahora `spawn_player()` también lo llama directo, igual
+  que ya hacía con `_place_player()`.
