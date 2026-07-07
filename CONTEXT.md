@@ -34,8 +34,12 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   con un RPC (`request_kill_player`) dirigido al servidor. Al morir, el servidor
   respawnea automáticamente al mismo `peer_id` después de `RESPAWN_DELAY=3.0`s
   (`_respawn_after_delay`, con `await get_tree().create_timer(...)`), siempre
-  que el peer siga conectado. UI mínima: botón "Host" + label de estado
-  (`Main/lobby_ui.gd`).
+  que el peer siga conectado. Cuando un peer nuevo se conecta, además de
+  spawnear su propio tanque, el servidor le manda `sync_existing_players` (RPC
+  dirigido solo a él) con los peer_ids de los jugadores que ya estaban antes —
+  esto crea copias "espejo" locales en el peer nuevo para los tanques que el
+  `PlayerSpawner` no replica retroactivamente (ver Decisiones tomadas). UI
+  mínima: botón "Host" + label de estado (`Main/lobby_ui.gd`).
 - **project.godot**: GodotSteam habilitado y configurado (`app_id=480` de test,
   `initialize_on_startup=false`), autoload `Networking`, layers Player/Wall/Bullet,
   input map `move_forward/move_backward/rotate_left/rotate_right/shoot`,
@@ -79,6 +83,13 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   para apuntar a un nodo que vive en `Main.tscn`/`Debug.tscn` — hay que
   configurarlo en runtime desde la escena que aloja al Player
   (`set_bullet_container()`), no hardcodeado en el `.tscn` del Player.
+- **`MultiplayerSpawner` no hace catch-up retroactivo para peers que se
+  conectan tarde**: un `add_child()` solo se replica a los peers que YA
+  estaban conectados en ese momento. Por eso un jugador que se une después de
+  que otros ya estaban jugando no los veía. Se resuelve con un RPC manual
+  (`sync_existing_players`, dirigido solo al peer nuevo) que crea copias
+  locales de los jugadores preexistentes — con guard para no duplicar si
+  alguno ya llegó por el camino normal.
 
 ## Próximos pasos
 - Playtesting real en el editor: F6 sobre `Debug/Debug.tscn` para iterar rápido
@@ -128,3 +139,15 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   solo en `_on_player_spawned` (el handler de esa señal), así que el player del
   host nunca lo recibía. Ahora `spawn_player()` también lo llama directo, igual
   que ya hacía con `_place_player()`.
+- **Bug real ya corregido (jugadores invisibles al unirse tarde)**: al probar
+  con una segunda cuenta de Steam, el cliente veía el laberinto (sincronizado
+  por RPC) pero ningún tanque — ni el suyo ni el del host. Causa: `PlayerSpawner`
+  no reenvía retroactivamente jugadores que ya existían antes de que ese peer
+  se conectara (ver Decisiones tomadas). Corregido con `sync_existing_players`.
+  Verificado con test headless (dedup + agregado de copias nuevas, sin
+  duplicar). **Limitación conocida que queda pendiente**: si un jugador
+  preexistente muere/despawnea, no está garantizado que la copia "espejo" en un
+  peer que se unió tarde se borre correctamente (el despawn nativo del
+  `PlayerSpawner` podría no reconocer esa copia como "suya") — podría quedar un
+  tanque fantasma hasta que ese peer se desconecte. No se aborda todavía porque
+  no fue parte de este pedido; anotar si se reporta.

@@ -50,6 +50,22 @@ func _on_peer_connected(peer_id: int) -> void:
 	# propio tanque (ver _place_player).
 	receive_maze_seed.rpc_id(peer_id, maze_seed)
 	spawn_player(peer_id)
+
+	# El PlayerSpawner solo replica un add_child() a los peers que YA ESTABAN
+	# conectados en ese preciso momento — no reenvia retroactivamente los
+	# jugadores que ya existian antes de que este peer se conectara. Por eso un
+	# jugador que se une despues no veia a nadie que ya estuviera jugando (el
+	# host y los demas si se ven entre si, porque para ellos esos spawns SI
+	# pasaron estando todos ya conectados). Se lo avisamos a mano, con un RPC
+	# dirigido solo a el.
+	var other_ids: Array = []
+	for child in players.get_children():
+		var other_id: int = child.name.to_int()
+		if other_id != peer_id:
+			other_ids.append(other_id)
+	if other_ids.size() > 0:
+		sync_existing_players.rpc_id(peer_id, other_ids)
+
 	_set_status("Hosteando (lobby %d) - %d jugador(es)" % [Networking.lobby_id, players.get_child_count()])
 
 
@@ -78,6 +94,24 @@ func spawn_player(peer_id: int) -> void:
 func receive_maze_seed(seed_value: int) -> void:
 	maze_seed = seed_value
 	maze_container.build(seed_value)
+
+
+# Corre SOLO en el peer recien conectado (rpc_id lo dirige puntual, ver
+# _on_peer_connected). Crea copias locales "espejo" de los jugadores que ya
+# existian antes de unirse. No hace falta mandarles la posicion: el
+# MultiplayerSynchronizer de cada Player tiene spawn=true, asi que apenas esta
+# copia local existe empieza a recibir la posicion/rotacion real de su dueño.
+# La autoridad de cada copia la resuelve player_controller.gd (_enter_tree) por
+# el nombre del nodo — no importa que ESTE peer sea quien hizo el add_child.
+@rpc("authority", "reliable")
+func sync_existing_players(peer_ids: Array) -> void:
+	for id in peer_ids:
+		if players.get_node_or_null(str(id)) != null:
+			continue # ya llego por el camino normal (raro, pero no duplicar)
+		var mirror := PLAYER_SCENE.instantiate()
+		mirror.name = str(id)
+		players.add_child(mirror)
+		mirror.set_bullet_container(bullets)
 
 
 # Se dispara en CADA peer (incluido el servidor) cuando el PlayerSpawner termina
