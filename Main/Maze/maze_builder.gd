@@ -1,10 +1,7 @@
 class_name MazeBuilder
 extends Node2D
 
-# WALL_THICKNESS agrega un pequeno margen extra a lo largo de cada segmento de pared
-# (no solo en su espesor) para que las esquinas donde se cruzan una pared horizontal
-# y una vertical no dejen un huequito diagonal sin colision.
-const WALL_THICKNESS := 4.0
+const WALL_THICKNESS := 6.0
 const WALL_COLOR := Color(0.25, 0.25, 0.25)
 
 @onready var generator: MazeGenerator = $MazeGenerator

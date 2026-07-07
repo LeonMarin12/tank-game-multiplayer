@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://dflmxf0rhig4q" path="res://Main/Maze/maze_generator.tscn" id="2_mazegen"]
 [ext_resource type="Script" uid="uid://bkw5gkuf802ng" path="res://Main/Maze/maze_builder.gd" id="3_mazebuilder"]
 [ext_resource type="PackedScene" uid="uid://cwltke5hpvgt2" path="res://Main/Player/player.tscn" id="4_player"]
+[ext_resource type="PackedScene" path="res://Main/PauseMenu/PauseMenu.tscn" id="5_pausemenu"]
 
 [node name="Debug" type="Node2D" unique_id=1444023706]
 script = ExtResource("1_sandbox")
@@ -12,11 +13,16 @@ script = ExtResource("1_sandbox")
 script = ExtResource("3_mazebuilder")
 
 [node name="MazeGenerator" parent="MazeContainer" unique_id=1548296915 instance=ExtResource("2_mazegen")]
+maze_width = 10
+maze_height = 10
+cell_size = 64
 
 [node name="Bullets" type="Node2D" parent="." unique_id=1636273947]
 unique_name_in_owner = true
 
 [node name="Player" parent="." unique_id=643024729 instance=ExtResource("4_player")]
 
-[node name="Camera2D" type="Camera2D" parent="Player" unique_id=2062775265]
-zoom = Vector2(3, 3)
+[node name="Dummy" parent="." instance=ExtResource("4_player")]
+input_enabled = false
+
+[node name="PauseMenu" parent="." instance=ExtResource("5_pausemenu")]

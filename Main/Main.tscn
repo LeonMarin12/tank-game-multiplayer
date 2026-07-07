@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://Main/Main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://Main/Maze/maze_generator.tscn" id="2_mazegen"]
 [ext_resource type="Script" path="res://Main/Maze/maze_builder.gd" id="3_mazebuilder"]
-[ext_resource type="Script" path="res://Main/lobby_ui.gd" id="4_lobbyui"]
+[ext_resource type="PackedScene" path="res://Main/PauseMenu/PauseMenu.tscn" id="4_pausemenu"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -22,27 +22,4 @@ unique_name_in_owner = true
 spawn_path = NodePath("Players")
 _spawnable_scenes = PackedStringArray("res://Main/Player/player.tscn")
 
-[node name="CanvasLayer" type="CanvasLayer" parent="."]
-
-[node name="LobbyUI" type="Control" parent="CanvasLayer"]
-layout_mode = 3
-anchors_preset = 0
-offset_left = 12.0
-offset_top = 12.0
-offset_right = 200.0
-offset_bottom = 60.0
-script = ExtResource("4_lobbyui")
-
-[node name="StatusLabel" type="Label" parent="CanvasLayer/LobbyUI"]
-layout_mode = 0
-offset_top = 24.0
-offset_right = 188.0
-offset_bottom = 48.0
-text = "Sin conectar"
-
-[node name="HostButton" type="Button" parent="CanvasLayer/LobbyUI"]
-layout_mode = 0
-offset_right = 100.0
-offset_bottom = 20.0
-focus_mode = 0
-text = "Host"
+[node name="PauseMenu" parent="." instance=ExtResource("4_pausemenu")]

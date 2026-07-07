@@ -1,13 +1,15 @@
 extends Node2D
 
 # ============================================================================
-# Main — conecta el flujo de conexion (autoload Networking) con el gameplay
-# (laberinto, jugadores, balas). Este script asume que un MultiplayerPeer ya
-# fue asignado a `multiplayer.multiplayer_peer` por Networking; el sabe COMO
-# se crea/une el peer de Steam, este script solo reacciona a que ya existe.
+# Main — la escena de gameplay en si (laberinto, jugadores, balas). Se entra
+# aca DESPUES de que todos ya estan conectados y el host aprieto "Empezar" en
+# el Lobby (ver Main/Lobby/lobby.gd), asi que un MultiplayerPeer ya esta
+# asignado a `multiplayer.multiplayer_peer` desde antes de que este script
+# corra — no hace falta esperar ninguna señal de conexion aca.
 # ============================================================================
 
 const PLAYER_SCENE := preload("res://Main/Player/player.tscn")
+const EXPLOSION_SCENE := preload("res://Main/Particles/explosion_particle.tscn")
 const SPAWN_RING_SLOTS := 4 # cuantas posiciones distintas hay alrededor del START
 const RESPAWN_DELAY := 3.0 # segundos entre morir y respawnear
 
@@ -15,7 +17,6 @@ const RESPAWN_DELAY := 3.0 # segundos entre morir y respawnear
 @onready var players: Node = $Players
 @onready var bullets: Node = $Bullets
 @onready var player_spawner: MultiplayerSpawner = $PlayerSpawner
-@onready var lobby_ui: Control = $CanvasLayer/LobbyUI
 
 var maze_seed: int = 0
 
@@ -25,26 +26,40 @@ func _ready() -> void:
 	# cada vez que el PlayerSpawner replica un jugador nuevo bajo "Players".
 	player_spawner.spawned.connect(_on_player_spawned)
 
-	Networking.host_created.connect(_on_host_created)
-	multiplayer.connected_to_server.connect(_on_connected_to_server)
-	multiplayer.server_disconnected.connect(_on_server_disconnected)
-
-
-# --- Flujo del host ----------------------------------------------------------
-
-# Se dispara solo en la maquina que crea el lobby (ver Networking._on_lobby_created).
-func _on_host_created() -> void:
+	# Se conecta siempre (host y clientes) porque cualquiera puede llegar a
+	# recibir esta señal si alguien se une DESPUES de que la partida ya
+	# arranco (ej. acepta una invitacion de Steam mid-game); el guard de
+	# is_server() dentro de _on_peer_connected filtra que solo el servidor
+	# reaccione.
 	multiplayer.peer_connected.connect(_on_peer_connected)
 
+	if multiplayer.is_server():
+		_bootstrap_as_server()
+
+
+# --- Flujo del servidor -------------------------------------------------------
+
+# Arma el laberinto y spawnea a TODOS los que ya estaban esperando en el Lobby
+# de una — a diferencia del viejo flujo (que arrancaba con un solo jugador y
+# sumaba de a uno via peer_connected), aca todos ya estan conectados desde
+# antes de entrar a esta escena.
+func _bootstrap_as_server() -> void:
 	maze_seed = randi()
 	maze_container.build(maze_seed)
-	_set_status("Hosteando (lobby %d) - esperando jugadores" % Networking.lobby_id)
 
 	spawn_player(multiplayer.get_unique_id())
+	for peer_id in multiplayer.get_peers():
+		receive_maze_seed.rpc_id(peer_id, maze_seed)
+		spawn_player(peer_id)
 
 
-# Se dispara SOLO en el servidor, una vez por cada peer nuevo que termina de conectar.
+# Se dispara SOLO en el servidor (los clientes tambien reciben la señal, pero
+# el guard de abajo los ignora): alguien se conecto DESPUES de que la partida
+# ya habia arrancado.
 func _on_peer_connected(peer_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+
 	# Orden importante: primero el seed del laberinto, recien despues el spawn del
 	# jugador. Asi el cliente ya puede calcular la celda START cuando le llegue su
 	# propio tanque (ver _place_player).
@@ -65,8 +80,6 @@ func _on_peer_connected(peer_id: int) -> void:
 			other_ids.append(other_id)
 	if other_ids.size() > 0:
 		sync_existing_players.rpc_id(peer_id, other_ids)
-
-	_set_status("Hosteando (lobby %d) - %d jugador(es)" % [Networking.lobby_id, players.get_child_count()])
 
 
 # El servidor es la unica autoridad del PlayerSpawner: agregar un hijo aca bajo
@@ -143,15 +156,35 @@ func _place_player(player: Node) -> void:
 # (caller != 1) esto solo hace que la funcion tambien corra localmente en el
 # cliente, donde el guard de abajo la ignora sin problema (no es el servidor).
 @rpc("any_peer", "call_local", "reliable")
-func request_kill_player(peer_id: int) -> void:
+func request_kill_player(player_path: NodePath) -> void:
 	if not multiplayer.is_server():
 		return
-	var player := players.get_node_or_null(str(peer_id))
+	var player := get_node_or_null(player_path)
 	if player:
+		# El nombre del nodo YA es el peer_id (ver spawn_player) — no hace falta
+		# que el llamador nos lo pase por separado.
+		var peer_id: int = player.name.to_int()
+		# La posicion hay que guardarla ANTES del queue_free (una vez liberado
+		# el nodo, global_position ya no es valido). spawn_explosion se manda
+		# a TODOS los peers (incluido el servidor via call_local) para que la
+		# explosion se vea en cada pantalla, no solo en la del servidor.
+		spawn_explosion.rpc(player.global_position)
 		# El servidor es autoridad del PlayerSpawner -> este queue_free() se
 		# replica solo a todos los peers como un despawn, sin RPC adicional.
 		player.queue_free()
 		_respawn_after_delay(peer_id)
+
+
+# Efecto puramente visual/cosmetico: cada peer instancia su propia copia local
+# de la explosion (no se replica via MultiplayerSpawner porque no hace falta
+# mantenerla sincronizada, solo se reproduce una vez y se destruye sola).
+@rpc("authority", "call_local", "reliable")
+func spawn_explosion(explosion_position: Vector2) -> void:
+	var explosion := EXPLOSION_SCENE.instantiate()
+	add_child(explosion)
+	explosion.global_position = explosion_position
+	explosion.emitting = true
+	explosion.finished.connect(explosion.queue_free)
 
 
 # Respawnea automaticamente al mismo peer_id despues de RESPAWN_DELAY segundos.
@@ -171,19 +204,3 @@ func _is_peer_connected(peer_id: int) -> bool:
 	# (que aca, al correr siempre en el servidor, es el del host) — por eso el
 	# caso del host se chequea aparte.
 	return peer_id == multiplayer.get_unique_id() or multiplayer.get_peers().has(peer_id)
-
-
-# --- UI de estado --------------------------------------------------------------
-
-func _on_connected_to_server() -> void:
-	_set_status("Conectado")
-
-
-func _on_server_disconnected() -> void:
-	_set_status("Desconectado del servidor")
-	get_tree().reload_current_scene()
-
-
-func _set_status(text: String) -> void:
-	if lobby_ui != null and lobby_ui.has_method("set_status"):
-		lobby_ui.set_status(text)

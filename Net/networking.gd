@@ -14,13 +14,21 @@ extends Node
 # Topologia: quien crea el lobby es automaticamente el host/servidor (peer id 1,
 # fijo por convencion de Godot). Todos los que se unen despues son clientes.
 # Es peer-to-peer via el relay de Steam, no hay un dedicated server aparte.
-
-signal host_created()
+#
+# Flujo de escenas: MainMenu -> (host_lobby() o unirse via overlay de Steam)
+# -> Lobby (espera jugadores, min. 2 para poder empezar) -> el host aprieta
+# "Empezar" -> Main (gameplay). Este autoload es quien decide cuando cambiar
+# de escena en cada paso: es el unico lugar que sabe de forma confiable en que
+# estado de conexion estamos, sin importar que escena este activa en cada
+# momento (evita duplicar esta logica en cada escena que podria necesitarla).
 
 const LOBBY_TYPE := Steam.LobbyType.LOBBY_TYPE_FRIENDS_ONLY # solo amigos ven/pueden unirse
 const MAX_MEMBERS := 4
 
 const DEFAULT_APP_ID := 480 # Spacewar, app id de test de Valve (ver project.godot [steam])
+
+const MAIN_MENU_SCENE := "res://Main/MainMenu/MainMenu.tscn"
+const LOBBY_SCENE := "res://Main/Lobby/Lobby.tscn"
 
 var peer: SteamMultiplayerPeer
 var lobby_id: int = 0 # id del lobby actual (0 = ninguno), util para debug/UI
@@ -43,6 +51,13 @@ func _ready() -> void:
 	var app_id: int = ProjectSettings.get_setting("steam/initialization/app_data/app_id", DEFAULT_APP_ID)
 	var init_result: Dictionary = Steam.steamInitEx(app_id)
 	steam_available = init_result.status == 0 # 0 = OK (ver Steam.STEAM_API_INIT_RESULT)
+
+	# Estas dos son señales built-in de Godot (no de Steam): se disparan solas
+	# cuando multiplayer.multiplayer_peer efectivamente conecta/desconecta, sin
+	# importar que escena este activa en ese momento — por eso viven aca y no
+	# en una escena en particular.
+	multiplayer.connected_to_server.connect(_on_connected_to_server)
+	multiplayer.server_disconnected.connect(_on_server_disconnected)
 
 	if not steam_available:
 		push_warning("No se pudo inicializar Steam (%s). El multiplayer no va a estar disponible, pero el resto del juego (player, laberinto) funciona igual sin problema — ver Debug/Debug.tscn." % str(init_result.get("verbal", "?")))
@@ -97,7 +112,9 @@ func _on_lobby_created(connect_result: int, new_lobby_id: int) -> void:
 	# aca, multiplayer.is_server(), multiplayer.peer_connected, RPCs, etc. funcionan.
 	multiplayer.multiplayer_peer = peer
 
-	host_created.emit()
+	# El host no "se conecta a si mismo" (no dispara connected_to_server, eso
+	# es solo para clientes) — por eso pasa a la sala de espera directo aca.
+	get_tree().change_scene_to_file(LOBBY_SCENE)
 
 
 # Se dispara cuando ENTRAMOS a un lobby, tanto si lo creamos nosotros (lobby_created
@@ -123,11 +140,8 @@ func _on_lobby_joined(joined_lobby_id: int, _permissions: int, _locked: bool, re
 	peer.create_client(Steam.getLobbyOwner(lobby_id))
 	multiplayer.multiplayer_peer = peer
 
-	# No emitimos una senal propia de "conectado" aca: la UI puede escuchar
-	# directamente las senales built-in de Godot `multiplayer.connected_to_server`
-	# y `multiplayer.server_disconnected`, que la propia asignacion de
-	# multiplayer.multiplayer_peer de arriba termina disparando. Son mas
-	# idiomaticas que inventar una senal nueva para lo mismo.
+	# La transicion a la sala de espera para el CLIENTE no pasa aca: recien pasa
+	# cuando la conexion de verdad termina de establecerse, ver _on_connected_to_server.
 
 
 # Se dispara cuando el jugador acepta una invitacion desde el overlay de Steam
@@ -135,3 +149,30 @@ func _on_lobby_joined(joined_lobby_id: int, _permissions: int, _locked: bool, re
 # pedimos a Steam que nos una a ese lobby; el resultado llega por _on_lobby_joined.
 func _on_join_requested(requested_lobby_id: int, _friend_steam_id: int) -> void:
 	Steam.joinLobby(requested_lobby_id)
+
+
+# Señal built-in de Godot: se dispara SOLO en el CLIENTE cuando su conexion
+# con el host termina de establecerse de verdad (no el host, que nunca "se
+# conecta a si mismo").
+func _on_connected_to_server() -> void:
+	get_tree().change_scene_to_file(LOBBY_SCENE)
+
+
+# Señal built-in de Godot: se dispara en un CLIENTE si pierde la conexion con
+# el host. Volvemos al menu principal — no hay partida sin servidor.
+func _on_server_disconnected() -> void:
+	peer = null
+	lobby_id = 0
+	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+
+
+# Llamado desde el menu de pausa ("Volver al menu principal"). Cierra la
+# conexion de red (si hay una) antes de volver — si sos el host, esto tambien
+# corta a todos los demas (a ellos les llega server_disconnected solos, y
+# vuelven al menu por su cuenta).
+func leave_game() -> void:
+	if peer != null:
+		peer.close()
+	multiplayer.multiplayer_peer = null
+	lobby_id = 0
+	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
