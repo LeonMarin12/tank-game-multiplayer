@@ -21,6 +21,13 @@ const RESPAWN_DELAY := 3.0 # segundos entre morir y respawnear
 
 var maze_seed: int = 0
 
+# Peers que ya estaban conectados (esperando en el Lobby) cuando arranco esta
+# escena, de los que todavia falta que confirmen notify_ready. Ver
+# _try_spawn_initial_cohort para el porque de esperar a TODOS antes de
+# spawnear a cualquiera, incluido el propio host.
+var _pending_initial_peers: Array = []
+var _initial_cohort_spawned := false
+
 
 func _ready() -> void:
 	# La camara ya NO sigue al player (antes vivia como hijo de player.tscn):
@@ -36,6 +43,7 @@ func _ready() -> void:
 	player_spawner.spawned.connect(_on_player_spawned)
 
 	if multiplayer.is_server():
+		multiplayer.peer_disconnected.connect(_on_peer_disconnected_while_waiting)
 		_bootstrap_as_server()
 	else:
 		# Le avisamos al servidor que YA terminamos de cargar Main.tscn de este
@@ -46,56 +54,93 @@ func _ready() -> void:
 
 # --- Flujo del servidor -------------------------------------------------------
 
-# Arma el laberinto y spawnea al propio host. A los DEMAS peers ya conectados
-# (los que estaban esperando en el Lobby) NO se los spawnea aca de forma
-# proactiva — cada uno lo pide solo con notify_ready cuando termina de cargar
-# su propio Main.tscn (ver esa funcion para el porque de este cambio).
+# Arma el laberinto. Todavia NO spawnea a nadie (ni siquiera al propio host):
+# ver _try_spawn_initial_cohort para el porque.
 func _bootstrap_as_server() -> void:
 	maze_seed = randi()
 	maze_container.build(maze_seed)
-	spawn_player(multiplayer.get_unique_id())
+	_pending_initial_peers = multiplayer.get_peers().duplicate()
+	_try_spawn_initial_cohort()
 
 
-# Avisado por CADA cliente (tanto el que ya estaba esperando en el Lobby como
-# el que se une mid-game aceptando una invitacion) apenas termina su propio
-# _ready() en esta escena — es decir, apenas su copia local de "Main" ya existe
-# de verdad. "any_peer" porque lo llama cualquier cliente, no el servidor.
+# Avisado por CADA cliente apenas termina su propio _ready() en esta escena —
+# es decir, apenas su copia local de "Main" ya existe de verdad. "any_peer"
+# porque lo llama cualquier cliente, no el servidor.
 #
-# Por que esto y no mandar el seed/spawn proactivamente al ver peer_connected
-# o multiplayer.get_peers(): start_game() en Lobby.gd cambia de escena en TODOS
-# los peers con un solo rpc() broadcast, pero el host (via call_local) cambia
-# de escena de forma local e INSTANTANEA, mientras que un cliente recien recibe
-# ese mismo RPC despues de un viaje de red real (el relay de Steam, server_relay
-# = true, nunca es instantaneo ni siquiera en LAN). Si el servidor mandara
-# receive_maze_seed/spawn_player apenas EL termina de cargar (que es casi
-# inmediato), esos paquetes casi seguro llegarian al cliente ANTES de que su
-# propio Main.tscn (y por lo tanto el nodo "Main" y el "PlayerSpawner" que
-# necesitan para resolverse) exista todavia del otro lado — Godot resuelve
-# RPCs/replicacion por NodePath al momento de llegar el paquete, y si el nodo
-# destino no existe todavia, lo descarta sin reintentar. Pidiendoselo AL REVES
-# (el cliente avisa cuando el YA esta listo) este problema es imposible: para
-# que notify_ready llegue al servidor, el cliente ya tuvo que recibir el RPC
-# inicial Y terminar de cargar su escena, y el servidor (gracias a call_local)
-# siempre termina de cargar la suya antes que eso pueda pasar.
+# Por que esperar a esto en vez de mandar el seed/spawn proactivamente al ver
+# peer_connected o multiplayer.get_peers(): start_game() en Lobby.gd cambia de
+# escena en TODOS los peers con un solo rpc() broadcast, pero el host (via
+# call_local) cambia de escena de forma local e INSTANTANEA, mientras que un
+# cliente recien recibe ese mismo RPC despues de un viaje de red real (el
+# relay de Steam, server_relay = true, nunca es instantaneo ni siquiera en
+# LAN). Si el servidor spawneara a alguien (el host incluido) apenas EL
+# termina de cargar, ese add_child() se replica AUTOMATICAMENTE a todos los
+# peers que YA figuran conectados en ese momento — incluyendo a un cliente que
+# todavia sigue en el Lobby o a mitad de cargar Main.tscn. Ese paquete llega
+# APUNTANDO A UN NODO QUE TODAVIA NO EXISTE del otro lado (Godot resuelve
+# RPCs/replicacion por NodePath al momento de llegar el paquete), se descarta
+# sin reintentar, y ademas deja roto para siempre el canal de sincronizacion
+# de posicion/rotacion de ese jugador (por eso el sintoma real fue un tanque
+# congelado en (0,0) durante toda la partida, no solo un frame perdido).
+# Pidiendoselo AL REVES (cada cliente avisa cuando el YA esta listo) esto es
+# imposible: para que notify_ready llegue al servidor, ESE cliente ya tuvo que
+# recibir el RPC inicial Y terminar de cargar su escena.
 @rpc("any_peer", "reliable")
 func notify_ready() -> void:
 	if not multiplayer.is_server():
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
-
-	# Orden importante: primero el seed del laberinto, recien despues el spawn del
-	# jugador. Asi el cliente ya puede calcular la celda START cuando le llegue su
-	# propio tanque (ver _place_player).
 	receive_maze_seed.rpc_id(peer_id, maze_seed)
-	spawn_player(peer_id)
 
-	# El PlayerSpawner solo replica un add_child() a los peers que YA ESTABAN
-	# conectados en ese preciso momento — no reenvia retroactivamente los
-	# jugadores que ya existian antes de que este peer se conectara. Por eso un
-	# jugador que se une despues no veia a nadie que ya estuviera jugando (el
-	# host y los demas si se ven entre si, porque para ellos esos spawns SI
-	# pasaron estando todos ya conectados). Se lo avisamos a mano, con un RPC
-	# dirigido solo a el.
+	if _pending_initial_peers.has(peer_id):
+		# Formaba parte del grupo que ya estaba en el Lobby cuando arranco la
+		# partida. Aca todavia NO lo spawneamos individualmente: si lo
+		# hicieramos, ese add_child() se replicaria de una a todos los peers
+		# ya conectados, incluidos otros compañeros de ESTE MISMO grupo que
+		# quizas todavia no mandaron su propio notify_ready — exactamente la
+		# misma condicion de carrera, con otra victima. Se spawnean todos
+		# juntos (host incluido) recien cuando el ULTIMO del grupo confirma.
+		_pending_initial_peers.erase(peer_id)
+		_try_spawn_initial_cohort()
+		return
+
+	# Alguien que se conecta DESPUES de que el grupo inicial ya esta todo
+	# spawneado y confirmado — no hay nadie mas todavia-cargando con quien
+	# competir, asi que se puede spawnear de una.
+	spawn_player(peer_id)
+	_sync_existing_players_to(peer_id)
+
+
+# Si alguien que estabamos esperando se desconecta ANTES de mandar su propio
+# notify_ready (ej. cierra el juego mientras Main.tscn todavia estaba
+# cargando), sacarlo de la lista de espera para no quedar esperando para
+# siempre a alguien que ya no va a confirmar nunca.
+func _on_peer_disconnected_while_waiting(peer_id: int) -> void:
+	if _pending_initial_peers.has(peer_id):
+		_pending_initial_peers.erase(peer_id)
+		_try_spawn_initial_cohort()
+
+
+# Recien spawnea al host y a TODOS los peers que ya estaban en el Lobby de una
+# sola vez, una vez que CADA UNO de ellos confirmo por su cuenta (notify_ready)
+# que ya tiene su propio Main.tscn cargado. En ese momento ya es seguro
+# broadcastear todos estos spawns: ninguno de los destinatarios esta "a mitad
+# de cargar" (ver notify_ready para el porque importa evitar eso).
+func _try_spawn_initial_cohort() -> void:
+	if _initial_cohort_spawned or not _pending_initial_peers.is_empty():
+		return
+	_initial_cohort_spawned = true
+	spawn_player(multiplayer.get_unique_id())
+	for peer_id in multiplayer.get_peers():
+		spawn_player(peer_id)
+
+
+# Le manda a un peer especifico los peer_ids de los jugadores que ya estaban
+# spawneados ANTES de que el se uniera. El PlayerSpawner solo replica un
+# add_child() a los peers que YA ESTABAN conectados en ese preciso momento —
+# no reenvia retroactivamente los jugadores que ya existian antes de que este
+# peer se conectara. Se lo avisamos a mano, con un RPC dirigido solo a el.
+func _sync_existing_players_to(peer_id: int) -> void:
 	var other_ids: Array = []
 	for child in players.get_children():
 		var other_id: int = child.name.to_int()
@@ -133,12 +178,13 @@ func receive_maze_seed(seed_value: int) -> void:
 
 
 # Corre SOLO en el peer recien conectado (rpc_id lo dirige puntual, ver
-# _on_peer_connected). Crea copias locales "espejo" de los jugadores que ya
-# existian antes de unirse. No hace falta mandarles la posicion: el
-# MultiplayerSynchronizer de cada Player tiene spawn=true, asi que apenas esta
-# copia local existe empieza a recibir la posicion/rotacion real de su dueño.
-# La autoridad de cada copia la resuelve player_controller.gd (_enter_tree) por
-# el nombre del nodo — no importa que ESTE peer sea quien hizo el add_child.
+# _sync_existing_players_to). Crea copias locales "espejo" de los jugadores
+# que ya existian antes de unirse. La posicion inicial se fija igual que
+# cualquier spawn (_place_player); el MultiplayerSynchronizer del dueño real
+# la va a corregir enseguida con la posicion/rotacion actual, pero no conviene
+# depender de eso a ciegas y dejarla en (0,0) mientras tanto. La autoridad de
+# cada copia la resuelve player_controller.gd (_enter_tree) por el nombre del
+# nodo — no importa que ESTE peer sea quien hizo el add_child.
 @rpc("authority", "reliable")
 func sync_existing_players(peer_ids: Array) -> void:
 	for id in peer_ids:
@@ -148,6 +194,7 @@ func sync_existing_players(peer_ids: Array) -> void:
 		mirror.name = str(id)
 		players.add_child(mirror)
 		mirror.set_bullet_container(bullets)
+		_place_player(mirror)
 
 
 # Se dispara en CADA peer (incluido el servidor) cuando el PlayerSpawner termina

@@ -191,14 +191,37 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   replicación por NodePath al momento de llegar el paquete, y si el destino no
   existe todavía lo descarta sin reintentar. Se invirtió el flujo: ahora cada
   cliente manda `notify_ready.rpc_id(1)` cuando SU PROPIO `Main.tscn` ya
-  cargó, y el servidor recién ahí le contesta. Esto es imposible que llegue
-  "temprano" porque para que el cliente pueda mandar ese aviso ya tuvo que
-  recibir el RPC inicial y cargar su escena — y el servidor, gracias a
-  `call_local`, siempre termina de cargar la suya antes de que eso pueda
-  pasar. De paso esto unificó en un solo lugar (`notify_ready`) la lógica que
-  antes estaba duplicada entre `_bootstrap_as_server` (peers ya en el Lobby) y
-  `_on_peer_connected` (alguien que se conecta mid-game) — se eliminó ese
-  segundo handler.
+  cargó, y el servidor recién ahí le contesta.
+- **Bug real confirmado en la primera prueba con 2 PCs (2026-07-12), la
+  corrección de `notify_ready` de arriba estaba INCOMPLETA**: el cliente veía
+  el laberinto bien, pero los dos tanques quedaban congelados en (0,0), sin
+  input, con este error repitiéndose en la consola del cliente:
+  `get_node: Node not found: "Main/Players/1/MultiplayerSynchronizer"` +
+  `process_simplify_path: Parameter "node" is null`. Causa: la primera versión
+  de `notify_ready` seguía dejando que **el host se spawneara a sí mismo de
+  forma inmediata** en `_bootstrap_as_server()` (`spawn_player(get_unique_id())`
+  sin esperar nada) — y como el cliente ya figuraba como peer conectado desde
+  que estaba en el Lobby, el `PlayerSpawner` le replicaba ese `add_child()` de
+  una, exactamente la misma carrera que se había diagnosticado para el spawn
+  del CLIENTE, pero ahora para el spawn del HOST. Peor todavía: al llegar ese
+  paquete a un nodo que no existe, Godot no solo lo descarta — deja rota para
+  siempre (mientras dure la partida) la asociación de esa ruta con el peer, así
+  que las actualizaciones de posición/rotación de ESE tanque nunca más se
+  resuelven del lado del cliente (de ahí el error repitiéndose y el tanque
+  fijo en (0,0), no solo un frame perdido). Corrección: ningún spawn del grupo
+  que ya estaba en el Lobby (host incluido) se manda hasta que **todos** los
+  miembros de ese grupo confirmaron `notify_ready` (`_pending_initial_peers` +
+  `_try_spawn_initial_cohort()`) — recién ahí se sabe que ninguno va a recibir
+  un `add_child()` apuntando a una escena que todavía no cargó. Un peer que se
+  desconecta mientras se lo espera se saca de la lista
+  (`_on_peer_disconnected_while_waiting`) para no trabar el arranque para
+  siempre. Alguien que se conecta DESPUÉS de que ese grupo inicial ya está
+  spawneado (`_on_peer_connected`/late-join) no corre ningún riesgo — se
+  spawnea de una, porque ya no hay nadie más "a mitad de cargar" con quien
+  competir. De paso se encontró y corrigió un segundo bug, más chico, en el
+  mismo área: `sync_existing_players` nunca llamaba `_place_player()` sobre la
+  copia "espejo" que crea — quedaba en (0,0) hasta que (si es que llegaba) el
+  primer paquete de sincronización la corrigiera.
 - **`MultiplayerSpawner` no hace catch-up retroactivo para peers que se
   conectan tarde**: un `add_child()` solo se replica a los peers que YA
   estaban conectados en ese momento. Por eso un jugador que se une después de
