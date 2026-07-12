@@ -1,28 +1,30 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene format=3 uid="uid://cw5cfugiixxkl"]
 
-[ext_resource type="Script" path="res://Main/Main.gd" id="1_main"]
-[ext_resource type="PackedScene" path="res://Main/Maze/maze_generator.tscn" id="2_mazegen"]
-[ext_resource type="Script" path="res://Main/Maze/maze_builder.gd" id="3_mazebuilder"]
+[ext_resource type="Script" uid="uid://c586ve6ac16wg" path="res://Main/Main.gd" id="1_main"]
+[ext_resource type="PackedScene" uid="uid://dflmxf0rhig4q" path="res://Main/Maze/maze_generator.tscn" id="2_mazegen"]
+[ext_resource type="Script" uid="uid://bkw5gkuf802ng" path="res://Main/Maze/maze_builder.gd" id="3_mazebuilder"]
 [ext_resource type="PackedScene" path="res://Main/PauseMenu/PauseMenu.tscn" id="4_pausemenu"]
 
-[node name="Main" type="Node2D"]
+[node name="Main" type="Node2D" unique_id=1384907201]
 script = ExtResource("1_main")
 
-[node name="MazeContainer" type="Node2D" parent="."]
+[node name="MazeContainer" type="Node2D" parent="." unique_id=900251395]
 script = ExtResource("3_mazebuilder")
 
-[node name="MazeGenerator" parent="MazeContainer" instance=ExtResource("2_mazegen")]
+[node name="MazeGenerator" parent="MazeContainer" unique_id=1462163849 instance=ExtResource("2_mazegen")]
+maze_width = 10
+maze_height = 10
+cell_size = 64
 
-[node name="Players" type="Node2D" parent="."]
+[node name="Players" type="Node2D" parent="." unique_id=1346229586]
 
-[node name="Bullets" type="Node2D" parent="."]
+[node name="Bullets" type="Node2D" parent="." unique_id=1671782579]
 unique_name_in_owner = true
 
-[node name="PlayerSpawner" type="MultiplayerSpawner" parent="."]
+[node name="PlayerSpawner" type="MultiplayerSpawner" parent="." unique_id=2120695272]
+_spawnable_scenes = PackedStringArray("uid://cwltke5hpvgt2")
 spawn_path = NodePath("Players")
-_spawnable_scenes = PackedStringArray("res://Main/Player/player.tscn")
 
-[node name="MazeCamera" type="Camera2D" parent="."]
-enabled = true
+[node name="MazeCamera" type="Camera2D" parent="." unique_id=1262744822]
 
-[node name="PauseMenu" parent="." instance=ExtResource("4_pausemenu")]
+[node name="PauseMenu" parent="." unique_id=2102596559 instance=ExtResource("4_pausemenu")]
