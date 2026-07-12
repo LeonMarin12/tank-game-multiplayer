@@ -177,52 +177,52 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   decide "¿este tanque en particular debería reaccionar al teclado?" —
   distinción que hace falta para el Dummy de `Debug.tscn`, que es autoritativo
   local (no hay red) pero no debe moverse ni disparar solo.
-- **Sincronización de spawn de players via VISIBILIDAD, no via timing
-  (`MultiplayerSynchronizer.public_visibility`)**: hubo dos intentos previos
-  de arreglar una condición de carrera real en la transición Lobby→Main
-  (`start_game()` cambia de escena en todos los peers con un solo `rpc()`,
-  pero el host, via `call_local`, lo hace al instante, mientras que un cliente
-  recién recibe ese RPC después de un viaje de red real — `server_relay = true`
-  fuerza el relay de Steam siempre, ni en LAN es instantáneo). Si se manda un
-  spawn/replicación a un peer ANTES de que su propio `Main.tscn` haya
-  terminado de cargar, el paquete apunta a un nodo que no existe todavía del
-  otro lado (Godot resuelve NodePaths al momento de llegar el paquete) y se
-  descarta sin reintentar — y PEOR, deja rota para siempre esa ruta para ese
-  peer, así que ni la posición/rotación ni el `BulletSpawner` de ese tanque
-  vuelven a resolver del otro lado durante toda la partida (síntoma real,
-  confirmado en pruebas con 2 PCs el 2026-07-12: tanques congelados en el
-  origen, sin input, con errores repitiéndose tipo `get_node: Node not found:
-  "Main/Players/1/MultiplayerSynchronizer"` y luego, al disparar,
-  `"Main/Players/1/BulletSpawner"`/`on_spawn_receive: spawner is null`). Un
-  primer intento (`notify_ready`, el cliente avisa cuando termina de cargar)
-  solo protegía el spawn del CLIENTE — el host se seguía spawneando a sí mismo
-  de inmediato en `_bootstrap_as_server()`, y ESE spawn seguía llegando
-  temprano a un cliente que ya figuraba conectado desde el Lobby. Un segundo
-  intento (esperar a que TODOS los del grupo inicial confirmaran antes de
-  spawnear a cualquiera, host incluido) seguía sin resolverlo del todo y
-  agregaba bastante complejidad (bookkeeping de "quién falta"). La solución
-  definitiva usa el mecanismo que Godot ya tiene para exactamente este caso:
-  el `MultiplayerSynchronizer` de `player.tscn` nace con
-  `public_visibility = false`, así que un `add_child()` bajo `PlayerSpawner`
-  **no se replica a NADIE** hasta que se llama
-  `player_controller.gd:reveal_to(peer_id)` a mano
-  (`synchronizer.set_visibility_for(peer_id, true)`) — y `MultiplayerSpawner`
-  respeta esa visibilidad tanto para el spawn inicial como para la
-  sincronización de posición/rotación en curso. Esto saca por completo el
-  timing de la ecuación: el servidor puede spawnear a quien quiera (host
-  incluido) apenas quiera, sin ningún riesgo, porque nadie lo va a VER hasta
-  que se lo revele explícitamente. `notify_ready` (el cliente avisa cuando
-  termina de cargar) sigue existiendo, pero ahora solo dispara
-  `reveal_to()` — nunca puede llegar "temprano" porque exige que ese cliente
-  ya haya cargado su propia escena para poder mandarlo. Esto también
-  reemplazó por completo el viejo `sync_existing_players` (RPC manual para
-  ponerse al día con jugadores preexistentes): revelar un jugador YA
-  EXISTENTE a un peer nuevo dispara el mismo mecanismo de "spawn diferido" y
-  manda su posición/rotación ACTUAL como parte del reveal, así que no hace
-  falta ningún camino separado para el catch-up. Un tanque respawneado
-  después de morir es una instancia nueva (visibilidad en `false` de nuevo)
-  así que también hay que revelárselo a los peers ya listos
-  (`_reveal_to_ready_peers`, en `_respawn_after_delay`).
+- **Bug real confirmado y arreglado (2026-07-12): `PlayerSpawner.spawn_path`
+  mal configurado**: en `Main.tscn`, `PlayerSpawner` tenía
+  `spawn_path = NodePath("Players")`. `PlayerSpawner` y `Players` son
+  HERMANOS (los dos hijos de `Main`), así que ese `NodePath` relativo se
+  resuelve buscando un HIJO de `PlayerSpawner` llamado "Players" (que no
+  existe) en vez del hermano — exactamente el mismo motivo por el que
+  `BulletSpawner` (en `player.tscn`) nunca usa un `NodePath` fijo, sino
+  `get_path_to(container)` calculado en runtime (ver más abajo, "nombres
+  únicos no cruzan..."). Corregido a `NodePath("../Players")`. Se confirmó
+  el bug de forma muy concreta: llamar `player_spawner.spawn(id)`
+  explícitamente (en vez de `add_child()` directo) fallaba localmente, sin
+  red de por medio, con `"Cannot find spawn node"` — es decir, el spawner
+  nunca pudo resolver correctamente su propio contenedor. Con `add_child()`
+  directo (lo que hace `spawn_player()`) el bug queda parcialmente
+  enmascarado para pruebas locales/solas (porque el código agrega el hijo
+  directamente sobre la referencia correcta de `Players`, sin depender de
+  que el spawner resuelva `spawn_path` el mismo), pero para la replicación
+  real hacia OTRO peer, el spawner sí necesita resolver `spawn_path`
+  correctamente de su lado — lo que probablemente explica por qué los
+  reportes de bugs de sincronización con 2 PCs (tanques congelados,
+  `Node not found: "Main/Players/1/..."`) persistieron a través de varios
+  intentos de arreglar el *timing* (`notify_ready`, esperar a que todos
+  confirmen, visibilidad de `MultiplayerSynchronizer`) sin resultado: el
+  problema no era (solo) de timing, era de configuración.
+  **Importante**: se revirtieron los intentos de arreglo por timing/visibilidad
+  (quedó el esquema simple de `notify_ready` + `_pending_initial_peers`, sin
+  el sistema de visibilidad, que resultó no ser confiable — ver nota de
+  `MultiplayerSynchronizer` más abajo) y se dejó SOLO el fix de `spawn_path`
+  además de esa lógica de espera. **No se pudo confirmar de punta a punta con
+  un test automatizado de 2 procesos reales** que esto resuelve el problema
+  por completo (un test con ENet plano en localhost seguía sin mostrar el
+  spawn del lado del cliente incluso después del fix, sin poder determinar
+  todavía si es una limitación del harness de testing o un problema real
+  adicional) — hace falta que el usuario confirme jugando con Steam real en
+  2 PCs. Si sigue fallando, el próximo paso sería revisar si hace falta algo
+  más allá de `spawn_path` para que `MultiplayerSpawner` replique
+  correctamente entre procesos reales (no solo localmente).
+- **`MultiplayerSynchronizer.set_visibility_for()` no es confiable cuando la
+  autoridad del synchronizer es un peer remoto** (no el servidor): se
+  intentó controlar el timing de spawn con `public_visibility = false` +
+  `set_visibility_for()` llamado desde el servidor, pero cada Player tiene
+  su autoridad recursivamente asignada al peer dueño (necesario para que
+  ese peer pueda transmitir su propio movimiento) — y por eso el servidor
+  NO puede controlar de forma confiable la visibilidad de ese
+  synchronizer (comportamiento documentado/conocido de Godot, no bug
+  nuestro). Se revirtió este enfoque.
 - **`MultiplayerSpawner` no hace catch-up retroactivo para peers que se
   conectan tarde**: un `add_child()` solo se replica a los peers que YA
   estaban conectados en ese momento. Por eso un jugador que se une después de

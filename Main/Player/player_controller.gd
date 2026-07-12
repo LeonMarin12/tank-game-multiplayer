@@ -21,7 +21,6 @@ var _fire_timer := 0.0
 @onready var bullet_spawner: MultiplayerSpawner = $BulletSpawner
 @onready var hurt_box: Area2D = $HurtBox
 @onready var muzzle: Marker2D = %Muzzle
-@onready var synchronizer: MultiplayerSynchronizer = $MultiplayerSynchronizer
 
 
 
@@ -76,18 +75,6 @@ func _on_hurt_box_body_entered(body: Node2D) -> void:
 # recien despues de agregar el Player al arbol.
 func set_bullet_container(container: Node) -> void:
 	bullet_spawner.spawn_path = bullet_spawner.get_path_to(container)
-
-
-# El MultiplayerSynchronizer de este Player nace con public_visibility=false
-# (ver player.tscn): por defecto NO se replica a NINGUN peer hasta que se lo
-# revele a mano. Esto es lo que le permite a Main.gd spawnear (add_child) un
-# jugador de forma inmediata sin arriesgarse a una condicion de carrera contra
-# un peer que todavia no termino de cargar su propio Main.tscn — el spawn
-# recien se manda de verdad cuando ESTE metodo se llama, y Main.gd solo lo
-# llama despues de confirmar (via notify_ready) que ese peer especifico ya
-# esta listo para recibirlo.
-func reveal_to(peer_id: int) -> void:
-	synchronizer.set_visibility_for(peer_id, true)
 
 
 func _physics_process(delta: float) -> void:

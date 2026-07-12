@@ -23,7 +23,7 @@ unique_name_in_owner = true
 
 [node name="PlayerSpawner" type="MultiplayerSpawner" parent="." unique_id=2120695272]
 _spawnable_scenes = PackedStringArray("uid://cwltke5hpvgt2")
-spawn_path = NodePath("Players")
+spawn_path = NodePath("../Players")
 
 [node name="MazeCamera" type="Camera2D" parent="." unique_id=1262744822]
 
