@@ -49,6 +49,7 @@ unique_name_in_owner = true
 position = Vector2(23, 0)
 
 [node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="." unique_id=1402649099]
+public_visibility = false
 replication_config = SubResource("SceneReplicationConfig_player")
 
 [node name="BulletSpawner" type="MultiplayerSpawner" parent="." unique_id=1359256796]
