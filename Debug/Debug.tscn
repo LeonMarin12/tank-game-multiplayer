@@ -25,4 +25,7 @@ unique_name_in_owner = true
 [node name="Dummy" parent="." instance=ExtResource("4_player")]
 input_enabled = false
 
+[node name="MazeCamera" type="Camera2D" parent="."]
+enabled = true
+
 [node name="PauseMenu" parent="." instance=ExtResource("5_pausemenu")]

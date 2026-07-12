@@ -11,9 +11,18 @@ const SPAWN_RING_SLOTS := 4 # mismo esquema que Main.gd para no apilar tanques e
 
 @onready var maze_container: MazeBuilder = $MazeContainer
 @onready var bullets: Node = $Bullets
+@onready var maze_camera: Camera2D = $MazeCamera
 
 
 func _ready() -> void:
+	# Igual que en Main.gd: la camara ya no vive dentro de player.tscn, es una
+	# unica camara estatica que encuadra el laberinto completo (ver
+	# _configure_static_camera). Aca build() es sincronico (no hay red de por
+	# medio), pero igual escuchamos "built" por consistencia con Main.gd y por
+	# si algun dia se llama build() de nuevo con otro seed.
+	maze_container.built.connect(_configure_static_camera)
+	get_viewport().size_changed.connect(_configure_static_camera)
+
 	maze_container.build(maze_seed)
 	_configure_players()
 	if auto_place_players_at_start:
@@ -45,6 +54,18 @@ func _place_player(player: Node2D) -> void:
 	var index := player.get_index()
 	var offset := Vector2.RIGHT.rotated(TAU * index / float(SPAWN_RING_SLOTS)) * 12.0
 	player.global_position = start_pos + offset
+
+
+# Ver Main.gd:_configure_static_camera (misma logica: centrar en el laberinto
+# y usar el zoom mas chico entre ancho/alto para que entre completo).
+func _configure_static_camera() -> void:
+	if maze_container.maze.is_empty():
+		return
+	maze_camera.global_position = maze_container.get_maze_center_world_position()
+	var viewport_size := get_viewport().get_visible_rect().size
+	var maze_size := maze_container.get_maze_pixel_size()
+	var zoom_value := minf(viewport_size.x / maze_size.x, viewport_size.y / maze_size.y)
+	maze_camera.zoom = Vector2(zoom_value, zoom_value)
 
 
 # Equivalente standalone de Main.gd:request_kill_player. No usa peer_id porque

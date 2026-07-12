@@ -22,4 +22,7 @@ unique_name_in_owner = true
 spawn_path = NodePath("Players")
 _spawnable_scenes = PackedStringArray("res://Main/Player/player.tscn")
 
+[node name="MazeCamera" type="Camera2D" parent="."]
+enabled = true
+
 [node name="PauseMenu" parent="." instance=ExtResource("4_pausemenu")]

@@ -20,6 +20,8 @@ extends CharacterBody2D
 var _fire_timer := 0.0
 @onready var bullet_spawner: MultiplayerSpawner = $BulletSpawner
 @onready var hurt_box: Area2D = $HurtBox
+@onready var muzzle: Marker2D = %Muzzle
+
 
 
 func _enter_tree() -> void:
@@ -106,14 +108,12 @@ func move_body() -> void:
 
 
 func _shoot() -> void:
-	# Nace un poco adelante del tanque para no auto-colisionar con la propia CollisionShape2D.
-	var muzzle_offset := Vector2.RIGHT.rotated(rotation) * 16.0
 
 	# bullet_spawner.spawn() replica el spawn a todos los peers automaticamente porque
 	# BulletSpawner comparte autoridad con este Player (ver _enter_tree). El diccionario
 	# viaja como argumento al spawn_function (_create_bullet) en CADA peer, incluido este.
 	bullet_spawner.spawn({
-		"position": global_position + muzzle_offset,
+		"position": muzzle.global_position,
 		"rotation": rotation,
 		# get_multiplayer_authority() en vez de name.to_int(): da el mismo peer_id en
 		# red, pero tambien funciona sin nombre numerico en pruebas locales (ver _enter_tree).

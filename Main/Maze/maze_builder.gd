@@ -4,6 +4,12 @@ extends Node2D
 const WALL_THICKNESS := 6.0
 const WALL_COLOR := Color(0.25, 0.25, 0.25)
 
+# Se emite al terminar build(): la camara estatica (ver Main.gd/debug_sandbox.gd)
+# necesita esperar a esto porque el tamaño real del laberinto (maze_width/height
+# del MazeGenerator) recien se conoce con certeza una vez generado, y en los
+# clientes build() corre async (llega por RPC, no en el mismo frame que _ready()).
+signal built
+
 @onready var generator: MazeGenerator = $MazeGenerator
 
 var maze: Array[Array] = []
@@ -20,12 +26,25 @@ func build(seed_value: int) -> void:
 	maze = generator.generate_maze(seed_value)
 	start_cell_pos = _find_cell_with_content(MazeCell.Content.START)
 	_build_walls()
+	built.emit()
 
 
 # Posicion en el mundo (pixeles) del centro de la celda START, usada como spawn point.
 func get_start_world_position() -> Vector2:
 	var cs := float(generator.cell_size)
 	return Vector2(start_cell_pos) * cs + Vector2(cs, cs) / 2.0
+
+
+# Tamaño total del laberinto en pixeles (ancho x alto), usado por la camara
+# estatica para calcular cuanto zoom hace falta para que entre completo.
+func get_maze_pixel_size() -> Vector2:
+	return Vector2(generator.maze_width, generator.maze_height) * float(generator.cell_size)
+
+
+# Centro geometrico del laberinto en coordenadas de mundo, donde se posiciona
+# la camara estatica (a diferencia del spawn point, que es la celda START).
+func get_maze_center_world_position() -> Vector2:
+	return get_maze_pixel_size() / 2.0
 
 
 func _clear_previous_walls() -> void:

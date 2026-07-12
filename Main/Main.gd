@@ -17,48 +17,71 @@ const RESPAWN_DELAY := 3.0 # segundos entre morir y respawnear
 @onready var players: Node = $Players
 @onready var bullets: Node = $Bullets
 @onready var player_spawner: MultiplayerSpawner = $PlayerSpawner
+@onready var maze_camera: Camera2D = $MazeCamera
 
 var maze_seed: int = 0
 
 
 func _ready() -> void:
+	# La camara ya NO sigue al player (antes vivia como hijo de player.tscn):
+	# ahora es una unica camara estatica que encuadra el laberinto completo.
+	# "built" se dispara cada vez que maze_container.build() termina, tanto en
+	# el servidor (_bootstrap_as_server) como en un cliente (receive_maze_seed),
+	# asi no hace falta llamar esto a mano en cada uno de esos dos lugares.
+	maze_container.built.connect(_configure_static_camera)
+	get_viewport().size_changed.connect(_configure_static_camera)
+
 	# "spawned" se dispara en TODOS los peers (incluido quien crea el nodo)
 	# cada vez que el PlayerSpawner replica un jugador nuevo bajo "Players".
 	player_spawner.spawned.connect(_on_player_spawned)
 
-	# Se conecta siempre (host y clientes) porque cualquiera puede llegar a
-	# recibir esta señal si alguien se une DESPUES de que la partida ya
-	# arranco (ej. acepta una invitacion de Steam mid-game); el guard de
-	# is_server() dentro de _on_peer_connected filtra que solo el servidor
-	# reaccione.
-	multiplayer.peer_connected.connect(_on_peer_connected)
-
 	if multiplayer.is_server():
 		_bootstrap_as_server()
+	else:
+		# Le avisamos al servidor que YA terminamos de cargar Main.tscn de este
+		# lado. Es el servidor quien decide cuando mandarnos el seed/spawnearnos
+		# (ver notify_ready) — no al reves. Ver esa funcion para el porque.
+		notify_ready.rpc_id(1)
 
 
 # --- Flujo del servidor -------------------------------------------------------
 
-# Arma el laberinto y spawnea a TODOS los que ya estaban esperando en el Lobby
-# de una — a diferencia del viejo flujo (que arrancaba con un solo jugador y
-# sumaba de a uno via peer_connected), aca todos ya estan conectados desde
-# antes de entrar a esta escena.
+# Arma el laberinto y spawnea al propio host. A los DEMAS peers ya conectados
+# (los que estaban esperando en el Lobby) NO se los spawnea aca de forma
+# proactiva — cada uno lo pide solo con notify_ready cuando termina de cargar
+# su propio Main.tscn (ver esa funcion para el porque de este cambio).
 func _bootstrap_as_server() -> void:
 	maze_seed = randi()
 	maze_container.build(maze_seed)
-
 	spawn_player(multiplayer.get_unique_id())
-	for peer_id in multiplayer.get_peers():
-		receive_maze_seed.rpc_id(peer_id, maze_seed)
-		spawn_player(peer_id)
 
 
-# Se dispara SOLO en el servidor (los clientes tambien reciben la señal, pero
-# el guard de abajo los ignora): alguien se conecto DESPUES de que la partida
-# ya habia arrancado.
-func _on_peer_connected(peer_id: int) -> void:
+# Avisado por CADA cliente (tanto el que ya estaba esperando en el Lobby como
+# el que se une mid-game aceptando una invitacion) apenas termina su propio
+# _ready() en esta escena — es decir, apenas su copia local de "Main" ya existe
+# de verdad. "any_peer" porque lo llama cualquier cliente, no el servidor.
+#
+# Por que esto y no mandar el seed/spawn proactivamente al ver peer_connected
+# o multiplayer.get_peers(): start_game() en Lobby.gd cambia de escena en TODOS
+# los peers con un solo rpc() broadcast, pero el host (via call_local) cambia
+# de escena de forma local e INSTANTANEA, mientras que un cliente recien recibe
+# ese mismo RPC despues de un viaje de red real (el relay de Steam, server_relay
+# = true, nunca es instantaneo ni siquiera en LAN). Si el servidor mandara
+# receive_maze_seed/spawn_player apenas EL termina de cargar (que es casi
+# inmediato), esos paquetes casi seguro llegarian al cliente ANTES de que su
+# propio Main.tscn (y por lo tanto el nodo "Main" y el "PlayerSpawner" que
+# necesitan para resolverse) exista todavia del otro lado — Godot resuelve
+# RPCs/replicacion por NodePath al momento de llegar el paquete, y si el nodo
+# destino no existe todavia, lo descarta sin reintentar. Pidiendoselo AL REVES
+# (el cliente avisa cuando el YA esta listo) este problema es imposible: para
+# que notify_ready llegue al servidor, el cliente ya tuvo que recibir el RPC
+# inicial Y terminar de cargar su escena, y el servidor (gracias a call_local)
+# siempre termina de cargar la suya antes que eso pueda pasar.
+@rpc("any_peer", "reliable")
+func notify_ready() -> void:
 	if not multiplayer.is_server():
 		return
+	var peer_id := multiplayer.get_remote_sender_id()
 
 	# Orden importante: primero el seed del laberinto, recien despues el spawn del
 	# jugador. Asi el cliente ya puede calcular la celda START cuando le llegue su
@@ -135,6 +158,20 @@ func sync_existing_players(peer_ids: Array) -> void:
 func _on_player_spawned(node: Node) -> void:
 	node.set_bullet_container(bullets)
 	_place_player(node)
+
+
+# Encuadra el laberinto entero en una camara fija (no atada a ningun player):
+# se centra en el laberinto y usa el zoom mas chico entre ancho/alto para que
+# entre completo sin recortarse en ningun eje (el eje sobrante deja un margen,
+# en vez de cortar el otro).
+func _configure_static_camera() -> void:
+	if maze_container.maze.is_empty():
+		return # todavia no se genero nada (ej. primer size_changed antes del build)
+	maze_camera.global_position = maze_container.get_maze_center_world_position()
+	var viewport_size := get_viewport().get_visible_rect().size
+	var maze_size := maze_container.get_maze_pixel_size()
+	var zoom_value := minf(viewport_size.x / maze_size.x, viewport_size.y / maze_size.y)
+	maze_camera.zoom = Vector2(zoom_value, zoom_value)
 
 
 func _place_player(player: Node) -> void:

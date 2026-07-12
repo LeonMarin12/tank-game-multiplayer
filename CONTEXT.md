@@ -51,19 +51,21 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   `multiplayer.server_disconnected` → vuelta a MainMenu) — centralizado ahí
   porque es el único lugar que conoce el estado de conexión sin importar qué
   escena esté activa. `Main.gd` (ahora solo gameplay, se entra con todos ya
-  conectados) arma el laberinto y spawnea a TODOS los que ya estaban esperando
-  en el Lobby de una (`_bootstrap_as_server`, gateado por `multiplayer.is_server()`
-  en `_ready()`); sigue usando `PlayerSpawner` (modo automático, solo el
-  servidor hace `add_child`) para cualquiera que se una DESPUÉS de que la
-  partida ya arrancó, y resuelve la destrucción de un player impactado con un
+  conectados) arma el laberinto y spawnea al propio host
+  (`_bootstrap_as_server`, gateado por `multiplayer.is_server()` en `_ready()`).
+  Cada CLIENTE, en vez de que el servidor lo spawnee proactivamente, avisa con
+  `notify_ready.rpc_id(1)` apenas termina de cargar su propia copia de
+  `Main.tscn`; recién ahí el servidor le contesta con el seed del laberinto y
+  lo spawnea (ver Decisiones tomadas: por qué el orden es al revés de lo que
+  parecería natural). Resuelve la destrucción de un player impactado con un
   RPC (`request_kill_player`) dirigido al servidor. Al morir, el servidor
   respawnea automáticamente al mismo `peer_id` después de `RESPAWN_DELAY=3.0`s
   (`_respawn_after_delay`, con `await get_tree().create_timer(...)`), siempre
-  que el peer siga conectado. A un peer que se une tarde (durante gameplay) el
-  servidor también le manda `sync_existing_players` (RPC dirigido solo a él)
-  con los peer_ids de los jugadores que ya estaban — esto crea copias "espejo"
-  locales para los tanques que el `PlayerSpawner` no replica retroactivamente
-  (ver Decisiones tomadas).
+  que el peer siga conectado. Junto con el spawn de cada cliente, el servidor
+  también le manda `sync_existing_players` (RPC dirigido solo a él) con los
+  peer_ids de los jugadores que ya estaban — esto crea copias "espejo" locales
+  para los tanques que el `PlayerSpawner` no replica retroactivamente (ver
+  Decisiones tomadas).
 - **project.godot**: GodotSteam habilitado y configurado (`app_id=480` de test,
   `initialize_on_startup=false`), autoload `Networking`, layers Player/Wall/Bullet,
   input map `move_forward/move_backward/rotate_left/rotate_right/shoot`,
@@ -113,6 +115,17 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   matar a un player, guarda su nombre y su `input_enabled`, lo destruye,
   dispara la explosión, y lo respawnea (mismo nombre, mismo `input_enabled`)
   después de `RESPAWN_DELAY=3.0`s sobre la celda START.
+- **Cámara estática**: ya no vive dentro de `player.tscn` (se sacó el
+  `Camera2D` que seguía al tanque). Ahora `Main.tscn` y `Debug.tscn` tienen su
+  propia `Camera2D` fija ("MazeCamera", `enabled = true`) que encuadra el
+  laberinto **completo**, centrada y con el zoom más chico entre ancho/alto
+  (`_configure_static_camera()` en `Main.gd`/`debug_sandbox.gd`) para que
+  entre entero sin recortarse en ningún eje. `maze_builder.gd` expone
+  `get_maze_pixel_size()` / `get_maze_center_world_position()` y una señal
+  `built` (se emite al final de `build()`) — la cámara se configura recién
+  ahí porque en un cliente el laberinto llega async por RPC (`receive_maze_seed`),
+  no en el mismo frame que `_ready()`. También se reconfigura sola si cambia el
+  tamaño de la ventana (`get_viewport().size_changed`).
 - **Dummy de pruebas** (`Debug.tscn`, nodo "Dummy"): una segunda instancia de
   `player.tscn` con `input_enabled = false` (export nuevo en
   `player_controller.gd`) — un tanque que no lee teclado ni dispara, pero sigue
@@ -164,6 +177,28 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   decide "¿este tanque en particular debería reaccionar al teclado?" —
   distinción que hace falta para el Dummy de `Debug.tscn`, que es autoritativo
   local (no hay red) pero no debe moverse ni disparar solo.
+- **El cliente avisa cuando está listo (`notify_ready`), el servidor NO empuja
+  proactivamente**: al principio, `_bootstrap_as_server()` (host) mandaba
+  `receive_maze_seed`/`spawn_player` a cada peer ya conectado apenas EL
+  terminaba de cargar `Main.tscn`. Esto tiene una condición de carrera real:
+  `Lobby.gd:start_game()` cambia de escena en todos los peers con un solo
+  `rpc()`, pero el host (via `call_local`) lo hace localmente al instante,
+  mientras que un cliente recién recibe ese mismo RPC después de un viaje de
+  red real (`server_relay = true` fuerza el relay de Steam siempre, ni
+  siquiera en LAN es instantáneo). El servidor terminaba mandando esos RPCs
+  ANTES de que el nodo "Main"/"PlayerSpawner" existiera del lado del cliente
+  (que seguía cargando o todavía en el Lobby) — Godot resuelve RPCs y
+  replicación por NodePath al momento de llegar el paquete, y si el destino no
+  existe todavía lo descarta sin reintentar. Se invirtió el flujo: ahora cada
+  cliente manda `notify_ready.rpc_id(1)` cuando SU PROPIO `Main.tscn` ya
+  cargó, y el servidor recién ahí le contesta. Esto es imposible que llegue
+  "temprano" porque para que el cliente pueda mandar ese aviso ya tuvo que
+  recibir el RPC inicial y cargar su escena — y el servidor, gracias a
+  `call_local`, siempre termina de cargar la suya antes de que eso pueda
+  pasar. De paso esto unificó en un solo lugar (`notify_ready`) la lógica que
+  antes estaba duplicada entre `_bootstrap_as_server` (peers ya en el Lobby) y
+  `_on_peer_connected` (alguien que se conecta mid-game) — se eliminó ese
+  segundo handler.
 - **`MultiplayerSpawner` no hace catch-up retroactivo para peers que se
   conectan tarde**: un `add_child()` solo se replica a los peers que YA
   estaban conectados en ese momento. Por eso un jugador que se une después de
@@ -189,6 +224,30 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   headless, pero no el aspecto visual real.
 
 ## Notas / Gotchas
+- **Revisión de sincronización online (2026-07-12)**: se revisó todo el código
+  de red a fondo (sin poder probarlo con una segunda cuenta real) buscando
+  bugs de timing/orden antes de la primera prueba con 2 PCs. Se encontró y
+  corrigió la condición de carrera del `notify_ready` (ver arriba). Quedan dos
+  gaps conocidos, **no corregidos todavía porque son features más grandes, no
+  bugs de lo que ya existe**:
+  - **Unirse a una partida ya empezada (mid-game) no lleva a `Main.tscn`**:
+    `Networking._on_connected_to_server()` SIEMPRE manda a un cliente recién
+    conectado a `Lobby.tscn`, sin importar si el host ya está jugando en
+    `Main.tscn`. Un amigo que acepta una invitación mid-game quedaría esperando
+    en un Lobby vacío, sin forma de entrar a la partida en curso. El código que
+    sí soportaría esto del lado de `Main.gd` (`notify_ready`/`sync_existing_players`)
+    está listo y funcionaría bien SI el cliente llegara a cargar `Main.tscn`,
+    pero falta ese último paso (`Networking.gd` necesitaría saber "el host ya
+    está jugando" y mandar al recién conectado directo a `Main.tscn` en vez de
+    a `Lobby.tscn`). No se implementó porque es una feature nueva, no estaba
+    pedida — avisar si se quiere soportar unirse mid-game.
+  - **Sin limpieza al desconectarse mid-game**: si un cliente cierra el juego o
+    pierde la conexión durante una partida, su tanque (y el de los demás desde
+    su perspectiva) no se despawnea — `Main.gd` no escucha
+    `multiplayer.peer_disconnected`. Queda un tanque "fantasma" hasta que
+    alguien reinicie. No es un bug de sincronización en sí (no rompe a los
+    peers que siguen conectados), es una falta de limpieza — bajo impacto para
+    una prueba corta entre dos personas, pero anotar si molesta.
 - **Testing de Steam con una sola cuenta**: dos instancias del juego en la misma
   PC comparten la misma sesión de Steam (mismo SteamID) y no pueden aparecer como
   dos miembros distintos de un lobby. Para probar host/invitación de verdad hace
@@ -247,6 +306,13 @@ conexión multiplayer por Steam** (lobbies + invitación vía GodotSteam). El ga
   hace falta volver a automatizar este tipo de test, probar corriendo la
   escena real vía `godot <scena> --quit-after N` en vez de un `SceneTree`
   scripteado.
+- **Bug real ya corregido (`Camera2D.current` no existe en Godot 4)**: al
+  armar la cámara estática se puso `current = true` en el `.tscn` (idioma de
+  Godot 3). En Godot 4 esa propiedad se llama `enabled`; con `current` la
+  escena parseaba sin error pero fallaba en tiempo de ejecución apenas algo
+  intentaba leer `cam.current` ("Invalid access to property or key
+  'current'"). Detectado con un test headless. Corregido a `enabled = true`
+  en `Main.tscn` y `Debug.tscn`.
 - **Testing de input (`_input`/`_unhandled_input`) en `--headless --script`**:
   confirmado que los eventos simulados con `Input.parse_input_event()` NO
   llegan a `_input`/`_unhandled_input` en este modo (probado con un nodo
